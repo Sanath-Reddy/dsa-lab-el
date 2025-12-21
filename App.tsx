@@ -2,6 +2,10 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Position, Rider, Entity, GridMode, Algorithm, Order, RiderStatus, OrderStatus } from './types';
 import { GRID_ROWS, GRID_COLS, COLORS, DELAY_MS, COOKING_TIME_MS } from './constants';
 import { findPath, getManhattanDistance } from './utils/pathfinding';
+import { solveAssignment, solveTSP } from './utils/algorithms';
+import { compareAlgorithms, ComparisonResult } from './utils/comparison';
+import AlgorithmRace from './components/AlgorithmRace';
+import AlgorithmDocs from './components/AlgorithmDocs';
 import { HomeIcon, HotelIcon, RiderIcon, WallIcon, SunIcon, MoonIcon } from './components/IconComponents';
 
 const App: React.FC = () => {
@@ -20,6 +24,13 @@ const App: React.FC = () => {
   const [algorithm, setAlgorithm] = useState<Algorithm>('DIJKSTRA');
   const [orderStep, setOrderStep] = useState<'NONE' | 'SELECT_HOME' | 'SELECT_HOTEL'>('NONE');
   const [selectedHomeId, setSelectedHomeId] = useState<string | null>(null);
+
+  // Comparison State
+  const [showRace, setShowRace] = useState(false);
+  const [showDocs, setShowDocs] = useState(false);
+  const [raceParams, setRaceParams] = useState<{ start: Position, end: Position, intermediate?: Position } | null>(null);
+
+  const [scenario, setScenario] = useState<'SANDBOX' | 'DEMO_ASTAR' | 'DEMO_HUNGARIAN' | 'DEMO_TSP'>('SANDBOX');
 
   // Stats & Visuals
   const [pathTrace, setPathTrace] = useState<Set<string>>(new Set());
@@ -172,7 +183,7 @@ const App: React.FC = () => {
 
             if (legPath) {
               // Add path (excluding start node to avoid stutter)
-              calculatedPath = [...calculatedPath, ...legPath.slice(1)];
+              calculatedPath = [...calculatedPath, ...legPath.path.slice(1)];
               currentPos = nextTarget.home.pos;
             }
           }
@@ -230,7 +241,7 @@ const App: React.FC = () => {
                   ...rider,
                   status: 'RETURNING',
                   encodedPathToHotel: null, // cleanup if needed
-                  pathQueue: returnPath.slice(1),
+                  pathQueue: returnPath.path.slice(1),
                   targetEntityId: hotelToReturnTo.id,
                   color: COLORS.RIDER_IDLE // Or a specific returning color? Keep idle color for now or maybe yellow
                 } as Rider;
@@ -473,7 +484,7 @@ const App: React.FC = () => {
               status: 'MOVING_TO_HOTEL',
               targetEntityId: hotelId,
               assignedOrderIds: [newOrderId],
-              pathQueue: pathToHotel.slice(1),
+              pathQueue: pathToHotel.path.slice(1),
               color: COLORS.RIDER_BUSY
             };
           }
@@ -508,34 +519,111 @@ const App: React.FC = () => {
     setStatusMessage("Grid cleared.");
   };
 
-  const resetSimulation = () => {
-    setOrders([]);
-    setPathTrace(new Set());
-    setDistanceTraveled(0);
-    setRiders(prev => prev.map(r => ({
-      ...r,
-      status: 'IDLE',
-      pathQueue: [],
-      assignedOrderIds: [],
-      targetEntityId: null,
-      color: COLORS.RIDER_IDLE
-    })));
-    setStatusMessage("Simulation reset.");
+  const runDemo = (type: 'STANDARD_DIJKSTRA' | 'STANDARD_GREEDY' | 'STANDARD_ASTAR' | 'DEMO_BATCHING' | 'DEMO_ASSIGNMENT' | 'DEMO_TSP') => {
+    // Handle Standard Modes which just set algo + standard map
+    if (type.startsWith('STANDARD_')) {
+      const algo = type.split('_')[1] as Algorithm;
+      setAlgorithm(algo);
+      setScenario('SANDBOX');
+      setupStandardMap();
+      setStatusMessage(`Standard Mode: ${algo}`);
+      return;
+    }
+
+    clearAll();
+    setScenario(type as any);
+
+    if (type === 'DEMO_BATCHING') {
+      // A* BATCHING DEMO
+      // 1 Rider, 2 Hotels, 2 Homes
+      // Show efficient path picking up from both
+      setStatusMessage("DEMO: A* Smart Batching. 1 Rider, Multiple Orders.");
+      const h1 = { id: 'h1', type: 'HOTEL', pos: { r: 5, c: 5 }, label: 'H1', color: COLORS.HOTEL };
+      const h2 = { id: 'h2', type: 'HOTEL', pos: { r: 8, c: 8 }, label: 'H2', color: COLORS.HOTEL };
+      setHotels([h1, h2]);
+
+      const r1 = { id: 'r1', type: 'RIDER', pos: { r: 2, c: 2 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R1', color: COLORS.RIDER_IDLE, speed: 1, movementAccumulator: 0 };
+      setRiders([r1] as any); // cast for speed prop if needed, though updated types should be fine
+
+      const d1 = { id: 'd1', type: 'HOME', pos: { r: 15, c: 15 }, label: 'D1', color: COLORS.HOME };
+      const d2 = { id: 'd2', type: 'HOME', pos: { r: 16, c: 17 }, label: 'D2', color: COLORS.HOME };
+      setHomes([d1, d2]);
+
+      // Auto place orders after short delay
+      setTimeout(() => {
+        // We need to access stateRef or similar to place orders, but we can't inside here easily without re-render cycle.
+        // We'll just define them.
+        // For this demo, we can just let user place orders or use a "Start Demo" button. 
+        // Let's just setup the board.
+        setStatusMessage("Demo Loaded. Place two orders to see Batching!");
+      }, 500);
+
+    } else if (type === 'DEMO_ASSIGNMENT') {
+      // MULTI AGENT
+      setStatusMessage("DEMO: Multi-Agent Assignment. 3 Riders, 3 Homes. Click 'Auto Assign' (Coming Soon)!");
+      // Setup 3 riders in a line
+      setRiders([
+        { id: 'r1', type: 'RIDER', pos: { r: 2, c: 5 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R1', color: COLORS.RIDER_IDLE, speed: 1, movementAccumulator: 0 },
+        { id: 'r2', type: 'RIDER', pos: { r: 2, c: 10 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R2', color: COLORS.RIDER_IDLE, speed: 1, movementAccumulator: 0 },
+        { id: 'r3', type: 'RIDER', pos: { r: 2, c: 15 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R3', color: COLORS.RIDER_IDLE, speed: 1, movementAccumulator: 0 }
+      ]);
+      setHotels([{ id: 'h1', type: 'HOTEL', pos: { r: 10, c: 10 }, label: 'HUB', color: COLORS.HOTEL }]);
+      // No Homes yet, let user place them? Or preset?
+      setHomes([
+        { id: 'd1', type: 'HOME', pos: { r: 15, c: 5 }, label: 'D1', color: COLORS.HOME },
+        { id: 'd2', type: 'HOME', pos: { r: 15, c: 10 }, label: 'D2', color: COLORS.HOME },
+        { id: 'd3', type: 'HOME', pos: { r: 15, c: 15 }, label: 'D3', color: COLORS.HOME }
+      ]);
+
+    } else if (type === 'DEMO_TSP') {
+      // TSP
+      setStatusMessage("DEMO: Traveling Salesman. 1 Rider, 8 Homes. Click 'Solve TSP'!");
+      setRiders([
+        { id: 'r1', type: 'RIDER', pos: { r: 10, c: 10 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'TSP-R', color: COLORS.RIDER_IDLE, speed: 2, movementAccumulator: 0 }
+      ]);
+      setHotels([{ id: 'h1', type: 'HOTEL', pos: { r: 10, c: 10 }, label: 'HUB', color: COLORS.HOTEL }]); // Start/End
+
+      // Random scatter 8 homes
+      const demoHomes = [];
+      for (let i = 0; i < 8; i++) {
+        let r = Math.floor(Math.random() * (GRID_ROWS - 2)) + 1;
+        let c = Math.floor(Math.random() * (GRID_COLS - 2)) + 1;
+        demoHomes.push({ id: `d${i}`, type: 'HOME', pos: { r, c }, label: `${i + 1}`, color: COLORS.HOME });
+      }
+      setHomes(demoHomes as any);
+    }
+  };
+
+  const setupStandardMap = () => {
+    clearAll();
+    setStatusMessage("Standard Map Loaded.");
+
+    // Create a balanced city layout
+    setHotels([
+      { id: 'h1', type: 'HOTEL', pos: { r: 5, c: 5 }, label: 'H1', color: COLORS.HOTEL },
+      { id: 'h2', type: 'HOTEL', pos: { r: 15, c: 15 }, label: 'H2', color: COLORS.HOTEL }
+    ]);
+
+    setRiders([
+      { id: 'r1', type: 'RIDER', pos: { r: 2, c: 2 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R1', color: COLORS.RIDER_IDLE, speed: 0.8, movementAccumulator: 0 },
+      { id: 'r2', type: 'RIDER', pos: { r: 2, c: 18 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R2', color: COLORS.RIDER_IDLE, speed: 1.2, movementAccumulator: 0 },
+      { id: 'r3', type: 'RIDER', pos: { r: 18, c: 2 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R3', color: COLORS.RIDER_IDLE, speed: 1.0, movementAccumulator: 0 }
+    ]);
+
+    setHomes([
+      { id: 'd1', type: 'HOME', pos: { r: 2, c: 10 }, label: 'D1', color: COLORS.HOME },
+      { id: 'd2', type: 'HOME', pos: { r: 10, c: 2 }, label: 'D2', color: COLORS.HOME },
+      { id: 'd3', type: 'HOME', pos: { r: 10, c: 18 }, label: 'D3', color: COLORS.HOME },
+      { id: 'd4', type: 'HOME', pos: { r: 18, c: 10 }, label: 'D4', color: COLORS.HOME },
+      { id: 'd5', type: 'HOME', pos: { r: 8, c: 8 }, label: 'D5', color: COLORS.HOME }
+    ]);
+
+    countsRef.current = { riders: 4, hotels: 3, homes: 6 };
   };
 
   // --- Initial Setup ---
   useEffect(() => {
-    // Add default entities
-    setRiders([
-      { id: 'r1', type: 'RIDER', pos: { r: 2, c: 2 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R1', color: COLORS.RIDER_IDLE, speed: 0.8, movementAccumulator: 0 },
-      { id: 'r2', type: 'RIDER', pos: { r: 2, c: 4 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R2', color: COLORS.RIDER_IDLE, speed: 1.5, movementAccumulator: 0 }
-    ]);
-    setHotels([{ id: 'h1', type: 'HOTEL', pos: { r: 10, c: 10 }, label: 'H1', color: COLORS.HOTEL }]);
-    setHomes([
-      { id: 'd1', type: 'HOME', pos: { r: 18, c: 18 }, label: 'D1', color: COLORS.HOME },
-      { id: 'd2', type: 'HOME', pos: { r: 18, c: 2 }, label: 'D2', color: COLORS.HOME }
-    ]);
-    countsRef.current = { riders: 3, hotels: 2, homes: 3 };
+    setupStandardMap();
   }, []);
 
 
@@ -577,6 +665,17 @@ const App: React.FC = () => {
     return Math.ceil((totalTicks * DELAY_MS) / 1000); // Seconds
   };
 
+  const handleAutoOrder = () => {
+    if (homes.length === 0 || hotels.length === 0) {
+      setStatusMessage("No Homes or Hotels to order from!");
+      return;
+    }
+    const randomHome = homes[Math.floor(Math.random() * homes.length)];
+    const randomHotel = hotels[Math.floor(Math.random() * hotels.length)];
+    createOrder(randomHome.id, randomHotel.id);
+    setStatusMessage(`Auto-Order: ${randomHotel.label} -> ${randomHome.label}`);
+  };
+
   return (
     <div className="min-h-screen transition-colors duration-300 bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 flex flex-col items-center">
 
@@ -596,43 +695,132 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 bg-slate-100 dark:bg-slate-900/50 p-1.5 rounded-xl border border-slate-200 dark:border-slate-700/50">
-            <div className="flex bg-white dark:bg-slate-800 rounded-lg p-1 mr-2 border border-slate-200 dark:border-slate-600">
-              <button onClick={() => setAlgorithm('DIJKSTRA')} className={`px-3 py-1.5 rounded text-xs font-semibold transition-all ${algorithm === 'DIJKSTRA' ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}>Dijkstra</button>
-              <button onClick={() => setAlgorithm('GREEDY')} className={`px-3 py-1.5 rounded text-xs font-semibold transition-all ${algorithm === 'GREEDY' ? 'bg-pink-600 text-white' : 'text-slate-500'}`}>Greedy</button>
+            {/* Consolidated Simulation Controller */}
+            <div className="flex items-center gap-2 bg-white dark:bg-slate-800 rounded-lg p-1.5 border border-slate-200 dark:border-slate-600">
+              <span className="text-xs font-bold text-slate-500 ml-2">Algorithm:</span>
+              <select
+                className="bg-transparent text-sm font-semibold text-slate-700 dark:text-slate-200 focus:outline-none cursor-pointer"
+                value={scenario === 'SANDBOX' ? `STANDARD_${algorithm}` : scenario}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val.startsWith('STANDARD_')) {
+                    const algo = val.split('_')[1] as Algorithm;
+
+                    if (scenario !== 'SANDBOX') {
+                      // Switching from Demo to Standard -> Load Default Map
+                      setScenario('SANDBOX');
+                      setAlgorithm(algo);
+                      setupStandardMap();
+                      setStatusMessage(`Map Loaded: ${algo} Mode`);
+                    } else {
+                      setAlgorithm(algo);
+                      setStatusMessage(`Algorithm switched to ${algo}`);
+                    }
+                  } else {
+                    runDemo(val as any);
+                  }
+                }}
+              >
+                <optgroup label="Visualize Pathfinding">
+                  <option value="STANDARD_DIJKSTRA">Dijkstra's Algorithm</option>
+                  <option value="STANDARD_GREEDY">Greedy Best-First</option>
+                  <option value="STANDARD_ASTAR">A* (A-Star) Search</option>
+                </optgroup>
+
+              </select>
             </div>
 
-            {(['WALL', 'RIDER', 'HOTEL', 'HOME'] as GridMode[]).map((m) => (
-              <button
-                key={m}
-                onClick={() => { setMode(m); setOrderStep('NONE'); setStatusMessage(`Mode: Place ${m}`); }}
-                className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${mode === m ? 'bg-indigo-600 text-white' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'}`}
-              >
-                {m.charAt(0) + m.slice(1).toLowerCase()}
-              </button>
-            ))}
+            <button
+              onClick={() => setShowDocs(true)}
+              className="px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all bg-sky-500 text-white shadow-md hover:bg-sky-600 hover:scale-105 active:scale-95"
+            >
+              <span>📚 Learn Algos</span>
+            </button>
+            <div className="h-8 w-px bg-slate-300 dark:bg-slate-600 mx-2"></div>
+
+            <button
+              onClick={() => {
+                if (homes.length < 1 || riders.length < 1) {
+                  setStatusMessage("Place Rider & Home first!");
+                  return;
+                }
+                // Run Benchmark on random pair or first available
+                // Ideally, let's use the first rider and first home to keep it simple, or last order
+                const r = riders[0];
+                const h = homes[0];
+                // Simple heuristic: Use the first hotel as intermediate if available
+                const hotel = hotels[0];
+
+                if (!r || !h) return;
+
+                setRaceParams({ start: r.pos, end: h.pos, intermediate: hotel ? hotel.pos : undefined });
+                setShowRace(true);
+              }}
+              className="px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all bg-amber-500 text-white shadow-md hover:bg-amber-600 hover:scale-105 active:scale-95"
+            >
+              <span>⚖️ Compare Algorithms</span>
+            </button>
+
+            <button
+              onClick={handleAutoOrder}
+              className="px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all bg-indigo-600 text-white shadow-md hover:bg-indigo-700 hover:scale-105 active:scale-95"
+            >
+              <span>🚀 Auto Assign Order</span>
+            </button>
+
+            {/* Manual Placement Tools */}
+            <div className="flex items-center gap-1 bg-slate-200 dark:bg-slate-700/50 rounded-lg p-1 mx-2">
+              {(['WALL', 'RIDER', 'HOTEL', 'HOME'] as GridMode[]).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => { setMode(m); setOrderStep('NONE'); setStatusMessage(`Mode: Place ${m}`); }}
+                  className={`p-2 rounded-md transition-all ${mode === m ? 'bg-white dark:bg-slate-600 shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
+                  title={`Place ${m}`}
+                >
+                  {m === 'WALL' && <WallIcon />}
+                  {m === 'RIDER' && <RiderIcon />}
+                  {m === 'HOTEL' && <HotelIcon />}
+                  {m === 'HOME' && <HomeIcon />}
+                </button>
+              ))}
+            </div>
+
             <button
               onClick={() => {
                 if (homes.length === 0 || hotels.length === 0 || riders.length === 0) {
-                  setStatusMessage("Need 1 Home, 1 Hotel, 1 Rider.");
+                  setStatusMessage("Need entities to order.");
                   return;
                 }
                 setMode('ORDER');
                 setOrderStep('SELECT_HOME');
-                setStatusMessage("Select a Home to deliver to.");
+                setStatusMessage("Manual: Select a Home");
               }}
-              className={`px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${mode === 'ORDER' ? 'bg-emerald-600 text-white' : 'text-emerald-600 border border-emerald-200'}`}
+              className={`px-3 py-2 rounded-lg text-sm font-semibold border transition-all ${mode === 'ORDER' ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : 'text-slate-500 border-transparent hover:bg-slate-200'}`}
             >
-              <span>🛍️ Order</span>
+              <span>� Manual</span>
             </button>
           </div>
 
           <div className="flex items-center gap-2">
             <button onClick={toggleTheme} className="p-2.5 rounded-lg border border-slate-200 dark:border-slate-700">{theme === 'dark' ? <SunIcon /> : <MoonIcon />}</button>
-            <button onClick={resetSimulation} className="px-4 py-2 rounded-lg text-sm font-semibold text-amber-600 border border-amber-200">Reset</button>
+            <button onClick={setupStandardMap} className="px-4 py-2 rounded-lg text-sm font-semibold text-amber-600 border border-amber-200">Reset</button>
             <button onClick={clearAll} className="px-4 py-2 rounded-lg text-sm font-semibold text-red-600 border border-red-200">Clear</button>
           </div>
         </div>
       </header>
+
+      {/* Race Modal */}
+      {showRace && raceParams && (
+        <AlgorithmRace
+          start={raceParams.start}
+          end={raceParams.end}
+          intermediate={raceParams.intermediate}
+          walls={walls}
+          onClose={() => setShowRace(false)}
+        />
+      )}
+
+      {showDocs && <AlgorithmDocs onClose={() => setShowDocs(false)} />}
 
       {/* Main Content */}
       <main className="flex-1 w-full max-w-6xl mx-auto p-6 flex flex-col items-center justify-start gap-6">

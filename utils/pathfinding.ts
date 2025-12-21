@@ -24,35 +24,50 @@ export const getManhattanDistance = (a: Position, b: Position) => {
   return Math.abs(a.r - b.r) + Math.abs(a.c - b.c);
 };
 
+export interface PathResult {
+  path: Position[];
+  visitedCount: number;
+  visitedOrder: Position[];
+  executionTime: number;
+}
+
 export const findPath = (
   start: Position,
   end: Position,
   walls: Set<string>,
   algorithm: Algorithm = 'DIJKSTRA'
-): Position[] | null => {
+): PathResult | null => {
+  const startTime = performance.now();
   const queue: PathNode[] = [{ pos: start, distance: 0, parent: null }];
   const visited = new Set<string>();
+  const visitedOrder: Position[] = [];
   const startKey = `${start.r},${start.c}`;
-  
+  let visitedCount = 0;
+
   visited.add(startKey);
+  visitedOrder.push(start);
 
   while (queue.length > 0) {
     // Priority Queue Logic
     if (algorithm === 'GREEDY') {
-      // Greedy Best-First Search: Sort by estimated distance to goal (heuristic)
-      // It doesn't care about distance traveled so far.
       queue.sort((a, b) => {
         const hA = getManhattanDistance(a.pos, end);
         const hB = getManhattanDistance(b.pos, end);
         return hA - hB;
       });
+    } else if (algorithm === 'ASTAR') {
+      queue.sort((a, b) => {
+        const fA = a.distance + getManhattanDistance(a.pos, end);
+        const fB = b.distance + getManhattanDistance(b.pos, end);
+        return fA - fB;
+      });
     } else {
-      // Dijkstra / BFS: Sort by actual distance traveled from start.
-      // Guarantees shortest path for unweighted grids.
+      // Dijkstra / BFS
       queue.sort((a, b) => a.distance - b.distance);
     }
 
     const current = queue.shift()!;
+    visitedCount++;
 
     if (current.pos.r === end.r && current.pos.c === end.c) {
       const path: Position[] = [];
@@ -61,7 +76,13 @@ export const findPath = (
         path.push(curr.pos);
         curr = curr.parent;
       }
-      return path.reverse();
+      const endTime = performance.now();
+      return {
+        path: path.reverse(),
+        visitedCount,
+        visitedOrder,
+        executionTime: endTime - startTime
+      };
     }
 
     const neighbors = getNeighbors(current.pos);
@@ -69,6 +90,7 @@ export const findPath = (
       const key = `${neighbor.r},${neighbor.c}`;
       if (!visited.has(key) && !walls.has(key)) {
         visited.add(key);
+        visitedOrder.push(neighbor);
         queue.push({
           pos: neighbor,
           distance: current.distance + 1,
@@ -77,5 +99,6 @@ export const findPath = (
       }
     }
   }
+
   return null;
 };

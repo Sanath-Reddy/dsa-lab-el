@@ -38,7 +38,7 @@ export interface Order {
 
 export type GridMode = 'WALL' | 'RIDER' | 'HOTEL' | 'HOME' | 'ORDER';
 
-export type Algorithm = 'DIJKSTRA' | 'GREEDY';
+export type Algorithm = 'DIJKSTRA' | 'GREEDY' | 'ASTAR';
 
 export interface PathNode {
   pos: Position;
