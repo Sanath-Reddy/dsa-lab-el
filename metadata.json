@@ -1,0 +1,5 @@
+{
+  "name": "BRANCH 2",
+  "description": "A city-scale food delivery simulator with pathfinding, entity labeling, and real-time distance tracking.",
+  "requestFramePermissions": []
+}
