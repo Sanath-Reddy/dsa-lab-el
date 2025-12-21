@@ -215,10 +215,46 @@ const App: React.FC = () => {
           const stillHasOrders = nextOrders.some(o => rider.assignedOrderIds.includes(o.id) && o.status !== 'DELIVERED');
 
           if (!stillHasOrders) {
-            // Return to parking or Idle
+            // ALL DONE -> RETURN TO HOTEL
+            // Find the hotel we came from (simplification: assume last order's hotel or find nearest)
+            // We'll use the hotel from the last delivered rider's order
+            const lastOrderId = rider.assignedOrderIds[rider.assignedOrderIds.length - 1];
+            const lastOrder = nextOrders.find(o => o.id === lastOrderId);
+            const hotelToReturnTo = hotels.find(h => h.id === lastOrder?.hotelId) || hotels[0]; // Fallback
+
+            if (hotelToReturnTo) {
+              const returnPath = findPath(rider.pos, hotelToReturnTo.pos, walls, algorithm);
+              if (returnPath) {
+                ridersChanged = true;
+                return {
+                  ...rider,
+                  status: 'RETURNING',
+                  encodedPathToHotel: null, // cleanup if needed
+                  pathQueue: returnPath.slice(1),
+                  targetEntityId: hotelToReturnTo.id,
+                  color: COLORS.RIDER_IDLE // Or a specific returning color? Keep idle color for now or maybe yellow
+                } as Rider;
+              }
+            }
+
+            // If no path or no hotel, just IDLE
             ridersChanged = true;
             return { ...rider, status: 'IDLE', assignedOrderIds: [], color: COLORS.RIDER_IDLE } as Rider;
           }
+        }
+      }
+
+      // RETURNING
+      if (rider.status === 'RETURNING') {
+        if (rider.pathQueue.length === 0) {
+          ridersChanged = true;
+          return {
+            ...rider,
+            status: 'IDLE',
+            assignedOrderIds: [],
+            targetEntityId: null,
+            color: COLORS.RIDER_IDLE
+          } as Rider;
         }
       }
 
@@ -335,71 +371,115 @@ const App: React.FC = () => {
     };
 
     // --- BATCHING & ASSIGNMENT LOGIC ---
-    // 1. Check for Rider already at this Hotel or moving to it
-    const existingRider = riders.find(r =>
+    // 1. Check for Rider ALREADY ASSIGNED to this Hotel (Moving there or Waiting)
+    const activeRidersForHotel = riders.filter(r =>
       (r.status === 'MOVING_TO_HOTEL' || r.status === 'WAITING_FOR_FOOD') &&
       r.targetEntityId === hotelId
     );
 
     let assignedRiderId = null;
+    let bestRider = null;
+    let minDetour = Infinity;
 
-    if (existingRider) {
-      // BATCH IT!
-      assignedRiderId = existingRider.id;
-      setStatusMessage(`Efficiency Check: Order batched with ${existingRider.label}!`);
+    // Smart Batching Heuristic:
+    // Only batch if the new home is "close enough" to one of the intended destinations of the rider.
+    // Threshold: e.g., 8 units Manhattan distance.
+    const BATCH_DISTANCE_THRESHOLD = 8;
+
+    for (const rider of activeRidersForHotel) {
+      // distinct homes this rider is already visiting
+      const riderOrderIds = rider.assignedOrderIds;
+      const riderOrders = orders.filter(o => riderOrderIds.includes(o.id));
+
+      // Find if any existing delivery destination is close to the NEW home
+      for (const existingOrder of riderOrders) {
+        const existingHome = homes.find(h => h.id === existingOrder.homeId);
+        if (existingHome) {
+          const dist = getManhattanDistance(existingHome.pos, home.pos);
+          if (dist <= BATCH_DISTANCE_THRESHOLD) {
+            // Found a good candidate!
+            if (dist < minDetour) {
+              minDetour = dist;
+              bestRider = rider;
+            }
+          }
+        }
+      }
+    }
+
+    if (bestRider) {
+      // EFFICIENT BATCH FOUND!
+      assignedRiderId = bestRider.id;
+      setStatusMessage(`Smart Batch: Assgn to ${bestRider.label} (Detour: ${minDetour})`);
 
       setRiders(prev => prev.map(r => {
-        if (r.id === existingRider.id) {
+        if (r.id === bestRider!.id) {
           return {
             ...r,
             assignedOrderIds: [...r.assignedOrderIds, newOrderId],
-            color: COLORS.RIDER_BUSY // Ensure they look busy
+            color: COLORS.RIDER_BUSY
           };
         }
         return r;
       }));
 
     } else {
-      // DISPATCH NEW RIDER
-      // Find nearest IDLE rider
-      const idleRiders = riders.filter(r => r.status === 'IDLE');
+      // NO EFFICIENT BATCH -> DISPATCH NEW RIDER
+      // Find nearest IDLE rider (or RETURNING rider could be re-routed, but let's stick to IDLE/RETURNING logic later if needed)
+      // Actually, RETURNING riders are good candidates if they are close to Hotel!
+      // For now, let's stick to IDLE riders as per standard request, or maybe check returning ones?
+      // Let's stick to IDLE for simplicity and clarity of "new dispatch".
+
+      const idleRiders = riders.filter(r => r.status === 'IDLE'); // Could also allow RETURNING riders to be re-tasked
 
       if (idleRiders.length === 0) {
-        setStatusMessage("No idle riders available. Order queued (Wait for updates feature).");
-        // For this demo, we just add the order but don't assign. 
-        // In a fuller version, we'd have a global unassigned queue.
-        // But let's just force assign to random busy one or fail gracefully for now.
-        setOrders(prev => [...prev, newOrder]);
-        return;
-      }
-
-      idleRiders.sort((a, b) => getManhattanDistance(a.pos, hotel.pos) - getManhattanDistance(b.pos, hotel.pos));
-      const chosenRider = idleRiders[0];
-      assignedRiderId = chosenRider.id;
-
-      // Calculate path to Hotel
-      const pathToHotel = findPath(chosenRider.pos, hotel.pos, walls, algorithm);
-
-      if (!pathToHotel) {
-        setStatusMessage(`Error: ${chosenRider.label} cannot reach ${hotel.label}`);
-        return;
-      }
-
-      setStatusMessage(`Dispatching ${chosenRider.label} to ${hotel.label}. Cooking started (15s).`);
-
-      setRiders(prev => prev.map(r => {
-        if (r.id === chosenRider.id) {
-          return {
-            ...r,
-            status: 'MOVING_TO_HOTEL',
-            targetEntityId: hotelId,
-            assignedOrderIds: [newOrderId],
-            pathQueue: pathToHotel.slice(1), // Remove current pos
-            color: COLORS.RIDER_BUSY
-          };
+        // FALLBACK: Forced Batching (if no idle riders, just give it to the first busy guy at the hotel, or ANY busy guy?)
+        // Let's look for ANY rider moving to this hotel even if far, better than stalling.
+        if (activeRidersForHotel.length > 0) {
+          const fallbackRider = activeRidersForHotel[0];
+          assignedRiderId = fallbackRider.id;
+          setStatusMessage(`High Demand: Queued with ${fallbackRider.label}`);
+          setRiders(prev => prev.map(r => {
+            if (r.id === fallbackRider.id) {
+              return { ...r, assignedOrderIds: [...r.assignedOrderIds, newOrderId] };
+            }
+            return r;
+          }));
+        } else {
+          setStatusMessage("No riders available. Order queued.");
+          setOrders(prev => [...prev, newOrder]);
+          return;
         }
-        return r;
-      }));
+      } else {
+        // NORMAL DISPATCH
+        idleRiders.sort((a, b) => getManhattanDistance(a.pos, hotel.pos) - getManhattanDistance(b.pos, hotel.pos));
+        const chosenRider = idleRiders[0];
+        assignedRiderId = chosenRider.id;
+
+        // Calculate path to Hotel
+        const pathToHotel = findPath(chosenRider.pos, hotel.pos, walls, algorithm);
+
+        if (!pathToHotel) {
+          setStatusMessage(`Error: ${chosenRider.label} cannot reach ${hotel.label}`);
+          return;
+        }
+
+        setStatusMessage(`Dispatching ${chosenRider.label} to ${hotel.label}.`);
+
+        setRiders(prev => prev.map(r => {
+          if (r.id === chosenRider.id) {
+            return {
+              ...r,
+              status: 'MOVING_TO_HOTEL',
+              targetEntityId: hotelId,
+              assignedOrderIds: [newOrderId],
+              pathQueue: pathToHotel.slice(1),
+              color: COLORS.RIDER_BUSY
+            };
+          }
+          return r;
+        }));
+      }
     }
 
     setOrders(prev => [...prev, { ...newOrder, riderId: assignedRiderId }]);
