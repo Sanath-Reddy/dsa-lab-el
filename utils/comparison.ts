@@ -10,39 +10,49 @@ export const compareAlgorithms = (
     start: Position,
     end: Position,
     walls: Set<string>,
-    intermediate?: Position
+    waypoints: Position[] = []
 ): ComparisonResult[] => {
     const results: ComparisonResult[] = [];
     const algorithms: Algorithm[] = ['DIJKSTRA', 'GREEDY', 'ASTAR'];
 
     algorithms.forEach(algo => {
-        if (intermediate) {
-            // Leg 1: Start -> Intermediate
-            const leg1 = findPath(start, intermediate, walls, algo);
-            // Leg 2: Intermediate -> End
-            const leg2 = findPath(intermediate, end, walls, algo);
+        let fullPath: Position[] = [];
+        let totalVisited = 0;
+        let totalExecutionTime = 0;
+        let allVisitedOrder: Position[] = [];
+        let success = true;
 
-            if (leg1 && leg2) {
-                // Merge Results
-                results.push({
-                    algorithm: algo,
-                    metrics: {
-                        path: [...leg1.path, ...leg2.path.slice(1)], // Join paths
-                        visitedCount: leg1.visitedCount + leg2.visitedCount,
-                        visitedOrder: [...leg1.visitedOrder, ...leg2.visitedOrder],
-                        executionTime: leg1.executionTime + leg2.executionTime
-                    }
-                });
+        const points = [start, ...waypoints, end];
+
+        for (let i = 0; i < points.length - 1; i++) {
+            const p1 = points[i];
+            const p2 = points[i + 1];
+            const leg = findPath(p1, p2, walls, algo);
+
+            if (leg) {
+                // If not first leg, remove the first point to avoid duplicate in path
+                fullPath = [...fullPath, ...(i === 0 ? leg.path : leg.path.slice(1))];
+                totalVisited += leg.visitedCount;
+                allVisitedOrder = [...allVisitedOrder, ...leg.visitedOrder];
+                totalExecutionTime += leg.executionTime;
             } else {
-                results.push({ algorithm: algo, metrics: null });
+                success = false;
+                break;
             }
-        } else {
-            // Direct Route
-            const res = findPath(start, end, walls, algo);
+        }
+
+        if (success) {
             results.push({
                 algorithm: algo,
-                metrics: res
+                metrics: {
+                    path: fullPath,
+                    visitedCount: totalVisited,
+                    visitedOrder: allVisitedOrder,
+                    executionTime: totalExecutionTime
+                }
             });
+        } else {
+            results.push({ algorithm: algo, metrics: null });
         }
     });
 

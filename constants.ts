@@ -11,6 +11,7 @@ export const COLORS = {
   HOTEL: 'bg-amber-400 text-amber-900',
   HOME: 'bg-emerald-500 text-emerald-50',
   PATH: 'bg-pink-500/40',
+  FUTURE_PATH: 'bg-indigo-400/30',
   EMPTY: 'bg-slate-100 dark:bg-slate-900',
   HIGHLIGHT_HOME: 'ring-4 ring-emerald-300 dark:ring-emerald-400 z-20',
   HIGHLIGHT_HOTEL: 'ring-4 ring-amber-300 dark:ring-amber-400 z-20',

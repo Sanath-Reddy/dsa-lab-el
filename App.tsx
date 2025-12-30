@@ -6,7 +6,8 @@ import { solveAssignment, solveTSP } from './utils/algorithms';
 import { compareAlgorithms, ComparisonResult } from './utils/comparison';
 import AlgorithmRace from './components/AlgorithmRace';
 import AlgorithmDocs from './components/AlgorithmDocs';
-import { HomeIcon, HotelIcon, RiderIcon, WallIcon, SunIcon, MoonIcon } from './components/IconComponents';
+import RouteBuilder from './components/RouteBuilder';
+import { HomeIcon, HotelIcon, RiderIcon, WallIcon, SunIcon, MoonIcon, CursorIcon } from './components/IconComponents';
 
 const App: React.FC = () => {
   // --- State ---
@@ -20,15 +21,17 @@ const App: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
 
   // UI State
-  const [mode, setMode] = useState<GridMode>('WALL');
+  const [mode, setMode] = useState<GridMode>('SELECT');
   const [algorithm, setAlgorithm] = useState<Algorithm>('DIJKSTRA');
   const [orderStep, setOrderStep] = useState<'NONE' | 'SELECT_HOME' | 'SELECT_HOTEL'>('NONE');
   const [selectedHomeId, setSelectedHomeId] = useState<string | null>(null);
+  const [selectedRiderId, setSelectedRiderId] = useState<string | null>(null);
 
   // Comparison State
   const [showRace, setShowRace] = useState(false);
   const [showDocs, setShowDocs] = useState(false);
-  const [raceParams, setRaceParams] = useState<{ start: Position, end: Position, intermediate?: Position } | null>(null);
+  const [raceParams, setRaceParams] = useState<{ start: Position, end: Position, waypoints?: Position[] } | null>(null);
+  const [showRouteBuilder, setShowRouteBuilder] = useState(false);
 
   const [scenario, setScenario] = useState<'SANDBOX' | 'DEMO_ASTAR' | 'DEMO_HUNGARIAN' | 'DEMO_TSP'>('SANDBOX');
 
@@ -170,6 +173,7 @@ const App: React.FC = () => {
           // Start from current pos (Hotel)
           let currentPos = rider.pos;
           let calculatedPath: Position[] = [];
+          const calculatedQueue: string[] = [];
           const remainingTargets = [...homeTargets];
 
           // Greedy Nearest Neighbor approach for simplicity (optimal enough for city scale < 5 stops)
@@ -179,6 +183,7 @@ const App: React.FC = () => {
             );
 
             const nextTarget = remainingTargets.shift()!;
+            calculatedQueue.push(nextTarget.orderId);
             const legPath = findPath(currentPos, nextTarget.home.pos, walls, algorithm);
 
             if (legPath) {
@@ -199,6 +204,7 @@ const App: React.FC = () => {
             ...rider,
             status: 'DELIVERING',
             pathQueue: calculatedPath,
+            deliveryQueue: calculatedQueue,
             targetEntityId: null // Clear target as we now have a complex path
           } as Rider;
         }
@@ -304,9 +310,27 @@ const App: React.FC = () => {
     const key = `${r},${c}`;
     const existing = getEntityAt(r, c);
 
+    // Selection Mode
+    if (mode === 'SELECT') {
+      if (existing && existing.type === 'RIDER') {
+        setSelectedRiderId(existing.id);
+        setStatusMessage(`Selected Rider: ${existing.label}`);
+      } else if (existing) {
+        setStatusMessage(`Selected ${existing.label} (${existing.type})`);
+        if (existing.type !== 'RIDER') setSelectedRiderId(null); // Clear rider selection if clicking other things
+      } else {
+        setSelectedRiderId(null);
+        setStatusMessage("Selection cleared.");
+      }
+      return;
+    }
+
     // Wall Mode
     if (mode === 'WALL') {
-      if (existing) return;
+      if (existing) {
+        if (existing.type === 'RIDER') setSelectedRiderId(existing.id);
+        return;
+      }
       setWalls(prev => {
         const next = new Set(prev);
         if (next.has(key)) next.delete(key);
@@ -349,7 +373,7 @@ const App: React.FC = () => {
       }]);
     } else if (mode === 'HOME') {
       setHomes(prev => [...prev, {
-        id, type: 'HOME', pos, label: `D${countsRef.current.homes++}`,
+        id, type: 'HOME', pos, label: `C${countsRef.current.homes++}`,
         color: COLORS.HOME
       }]);
     }
@@ -562,8 +586,8 @@ const App: React.FC = () => {
       const r1 = { id: 'r1', type: 'RIDER', pos: { r: 2, c: 2 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R1', color: COLORS.RIDER_IDLE, speed: 1, movementAccumulator: 0 };
       setRiders([r1] as any); // cast for speed prop if needed, though updated types should be fine
 
-      const d1 = { id: 'd1', type: 'HOME', pos: { r: 15, c: 15 }, label: 'D1', color: COLORS.HOME };
-      const d2 = { id: 'd2', type: 'HOME', pos: { r: 16, c: 17 }, label: 'D2', color: COLORS.HOME };
+      const d1 = { id: 'd1', type: 'HOME', pos: { r: 15, c: 15 }, label: 'C1', color: COLORS.HOME };
+      const d2 = { id: 'd2', type: 'HOME', pos: { r: 16, c: 17 }, label: 'C2', color: COLORS.HOME };
       setHomes([d1, d2]);
 
       // Auto place orders after short delay
@@ -587,9 +611,9 @@ const App: React.FC = () => {
       setHotels([{ id: 'h1', type: 'HOTEL', pos: { r: 10, c: 10 }, label: 'HUB', color: COLORS.HOTEL }]);
       // No Homes yet, let user place them? Or preset?
       setHomes([
-        { id: 'd1', type: 'HOME', pos: { r: 15, c: 5 }, label: 'D1', color: COLORS.HOME },
-        { id: 'd2', type: 'HOME', pos: { r: 15, c: 10 }, label: 'D2', color: COLORS.HOME },
-        { id: 'd3', type: 'HOME', pos: { r: 15, c: 15 }, label: 'D3', color: COLORS.HOME }
+        { id: 'd1', type: 'HOME', pos: { r: 15, c: 5 }, label: 'C1', color: COLORS.HOME },
+        { id: 'd2', type: 'HOME', pos: { r: 15, c: 10 }, label: 'C2', color: COLORS.HOME },
+        { id: 'd3', type: 'HOME', pos: { r: 15, c: 15 }, label: 'C3', color: COLORS.HOME }
       ]);
 
     } else if (type === 'DEMO_TSP') {
@@ -628,11 +652,11 @@ const App: React.FC = () => {
     ]);
 
     setHomes([
-      { id: 'd1', type: 'HOME', pos: { r: 2, c: 10 }, label: 'D1', color: COLORS.HOME },
-      { id: 'd2', type: 'HOME', pos: { r: 10, c: 2 }, label: 'D2', color: COLORS.HOME },
-      { id: 'd3', type: 'HOME', pos: { r: 10, c: 18 }, label: 'D3', color: COLORS.HOME },
-      { id: 'd4', type: 'HOME', pos: { r: 18, c: 10 }, label: 'D4', color: COLORS.HOME },
-      { id: 'd5', type: 'HOME', pos: { r: 8, c: 8 }, label: 'D5', color: COLORS.HOME }
+      { id: 'd1', type: 'HOME', pos: { r: 2, c: 10 }, label: 'C1', color: COLORS.HOME },
+      { id: 'd2', type: 'HOME', pos: { r: 10, c: 2 }, label: 'C2', color: COLORS.HOME },
+      { id: 'd3', type: 'HOME', pos: { r: 10, c: 18 }, label: 'C3', color: COLORS.HOME },
+      { id: 'd4', type: 'HOME', pos: { r: 18, c: 10 }, label: 'C4', color: COLORS.HOME },
+      { id: 'd5', type: 'HOME', pos: { r: 8, c: 8 }, label: 'C5', color: COLORS.HOME }
     ]);
 
     countsRef.current = { riders: 4, hotels: 3, homes: 6 };
@@ -641,6 +665,7 @@ const App: React.FC = () => {
   // --- Initial Setup ---
   useEffect(() => {
     setupStandardMap();
+    document.title = "Food Delivery System";
   }, []);
 
 
@@ -704,8 +729,8 @@ const App: React.FC = () => {
               <RiderIcon />
             </div>
             <div>
-              <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-500 dark:from-indigo-400 dark:to-purple-400">
-                LogiX Dispatch
+              <h1 className="text-2xl font-black bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-violet-500 tracking-tight">
+                Food Delivery system
               </h1>
               <p className="text-xs text-slate-500 dark:text-slate-400">Smart Batching & Routing</p>
             </div>
@@ -755,28 +780,51 @@ const App: React.FC = () => {
             </button>
             <div className="h-8 w-px bg-slate-300 dark:bg-slate-600 mx-2"></div>
 
-            <button
-              onClick={() => {
-                if (homes.length < 1 || riders.length < 1) {
-                  setStatusMessage("Place Rider & Home first!");
-                  return;
-                }
-                // Run Benchmark on random pair or first available
-                // Ideally, let's use the first rider and first home to keep it simple, or last order
-                const r = riders[0];
-                const h = homes[0];
-                // Simple heuristic: Use the first hotel as intermediate if available
-                const hotel = hotels[0];
+            <div className="flex flex-col items-center gap-1">
+              <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Compare Algorithms</span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => {
+                    if (homes.length < 1 || riders.length < 1) {
+                      setStatusMessage("Place Rider & Home first!");
+                      return;
+                    }
+                    // Random Logic
+                    const r = riders[Math.floor(Math.random() * riders.length)];
+                    const h = homes[Math.floor(Math.random() * homes.length)];
+                    // HEURISTIC: Always try to go via a Hotel for "Delivery Simulation" accuracy
+                    const hotel = hotels[Math.floor(Math.random() * hotels.length)];
 
-                if (!r || !h) return;
+                    if (!r || !h) return;
 
-                setRaceParams({ start: r.pos, end: h.pos, intermediate: hotel ? hotel.pos : undefined });
-                setShowRace(true);
-              }}
-              className="px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all bg-amber-500 text-white shadow-md hover:bg-amber-600 hover:scale-105 active:scale-95"
-            >
-              <span>⚖️ Compare Algorithms</span>
-            </button>
+                    setRaceParams({
+                      start: r.pos,
+                      end: h.pos,
+                      waypoints: hotel ? [hotel.pos] : []
+                    });
+                    setShowRace(true);
+                    setStatusMessage("Random Race Started!");
+                  }}
+                  className="px-3 py-2 rounded-l-lg text-sm font-bold flex items-center gap-2 transition-all bg-amber-500 text-white shadow-md hover:bg-amber-600 hover:scale-105 active:scale-95 border-r border-amber-600"
+                  title="Random Race"
+                >
+                  <span>🎲 Random</span>
+                </button>
+                <button
+                  onClick={() => {
+                    if (riders.length === 0 || hotels.length === 0 || homes.length === 0) {
+                      setStatusMessage("Need 1 Rider, 1 Hotel, 1 Home minimum.");
+                      return;
+                    }
+                    setShowRouteBuilder(true);
+                  }}
+                  className={`px-3 py-2 rounded-r-lg text-sm font-bold flex items-center gap-2 transition-all shadow-md  hover:scale-105 active:scale-95 ${showRouteBuilder ? 'bg-amber-700 ring-2 ring-amber-300 text-white' : 'bg-amber-500 text-white hover:bg-amber-600'}`}
+                  title="Manual Race Selection"
+                >
+                  <span>👆 Manual</span>
+                </button>
+              </div>
+            </div>
 
             <button
               onClick={handleAutoOrder}
@@ -787,13 +835,14 @@ const App: React.FC = () => {
 
             {/* Manual Placement Tools */}
             <div className="flex items-center gap-1 bg-slate-200 dark:bg-slate-700/50 rounded-lg p-1 mx-2">
-              {(['WALL', 'RIDER', 'HOTEL', 'HOME'] as GridMode[]).map((m) => (
+              {(['SELECT', 'WALL', 'RIDER', 'HOTEL', 'HOME'] as GridMode[]).map((m) => (
                 <button
                   key={m}
-                  onClick={() => { setMode(m); setOrderStep('NONE'); setStatusMessage(`Mode: Place ${m}`); }}
+                  onClick={() => { setMode(m); setOrderStep('NONE'); setStatusMessage(`Mode: ${m === 'SELECT' ? 'Select Entity' : `Place ${m}`}`); }}
                   className={`p-2 rounded-md transition-all ${mode === m ? 'bg-white dark:bg-slate-600 shadow-sm text-indigo-600' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
-                  title={`Place ${m}`}
+                  title={m === 'SELECT' ? 'Select Mode' : `Place ${m}`}
                 >
+                  {m === 'SELECT' && <CursorIcon />}
                   {m === 'WALL' && <WallIcon />}
                   {m === 'RIDER' && <RiderIcon />}
                   {m === 'HOTEL' && <HotelIcon />}
@@ -831,155 +880,292 @@ const App: React.FC = () => {
         <AlgorithmRace
           start={raceParams.start}
           end={raceParams.end}
-          intermediate={raceParams.intermediate}
+          waypoints={raceParams.waypoints}
           walls={walls}
           onClose={() => setShowRace(false)}
+        />
+      )}
+
+      {/* Route Builder Modal */}
+      {showRouteBuilder && (
+        <RouteBuilder
+          onClose={() => setShowRouteBuilder(false)}
+          riders={riders}
+          hotels={hotels}
+          homes={homes}
+          onStartRace={(start, waypoints, end) => {
+            setRaceParams({ start, end, waypoints });
+            setShowRace(true);
+            setStatusMessage("Custom Race Started!");
+          }}
         />
       )}
 
       {showDocs && <AlgorithmDocs onClose={() => setShowDocs(false)} />}
 
       {/* Main Content */}
-      <main className="flex-1 w-full max-w-6xl mx-auto p-6 flex flex-col items-center justify-start gap-6">
+      <main className="flex-1 w-full max-w-7xl mx-auto p-6 flex items-start justify-center gap-6">
 
-        {/* HUD */}
-        <div className="flex flex-wrap gap-4 items-center justify-center w-full">
-          <div className="bg-white dark:bg-slate-800 px-6 py-3 rounded-full flex items-center gap-3 shadow-lg border border-slate-200 dark:border-slate-700">
-            <span className={`w-2 h-2 rounded-full animate-pulse ${mode === 'ORDER' ? 'bg-emerald-500' : 'bg-indigo-500'}`}></span>
-            <span className="font-mono text-indigo-600 dark:text-indigo-200 font-medium">{statusMessage}</span>
+        {/* Left Column (Grid + Stats) */}
+        <div className="flex flex-col gap-6 flex-1 max-w-4xl">
+          {/* HUD */}
+          <div className="flex flex-wrap gap-4 items-center justify-center w-full">
+            <div className="bg-white dark:bg-slate-800 px-6 py-3 rounded-full flex items-center gap-3 shadow-lg border border-slate-200 dark:border-slate-700">
+              <span className={`w-2 h-2 rounded-full animate-pulse ${mode === 'ORDER' ? 'bg-emerald-500' : 'bg-indigo-500'}`}></span>
+              <span className="font-mono text-indigo-600 dark:text-indigo-200 font-medium">{statusMessage}</span>
+            </div>
           </div>
-        </div>
 
-        {/* Grid */}
-        <div className="relative p-3 bg-slate-200 dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-700 overflow-hidden">
-          <div
-            className="grid gap-px bg-slate-300 dark:bg-slate-700/50 border border-slate-300 dark:border-slate-700"
-            style={{
-              gridTemplateColumns: `repeat(${GRID_COLS}, 2rem)`,
-              gridTemplateRows: `repeat(${GRID_ROWS}, 2rem)`
-            }}
-          >
-            {Array.from({ length: GRID_ROWS * GRID_COLS }).map((_, i) => {
-              const r = Math.floor(i / GRID_COLS);
-              const c = i % GRID_COLS;
-              const key = `${r},${c}`;
-              const entity = getEntityAt(r, c);
-              const isW = isWall(r, c);
-              const isPath = pathTrace.has(key);
+          {/* Grid */}
+          <div className="relative p-3 bg-slate-200 dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-300 dark:border-slate-700 overflow-hidden mx-auto">
+            <div
+              className="grid gap-px bg-slate-300 dark:bg-slate-700/50 border border-slate-300 dark:border-slate-700"
+              style={{
+                gridTemplateColumns: `repeat(${GRID_COLS}, 2rem)`,
+                gridTemplateRows: `repeat(${GRID_ROWS}, 2rem)`
+              }}
+            >
+              {(() => {
+                // Pre-calculate future paths for performance
+                const futurePathSet = new Set<string>();
+                riders.forEach(r => {
+                  r.pathQueue.forEach(p => futurePathSet.add(`${p.r},${p.c}`));
+                });
 
-              const isSelectedHome = entity?.id === selectedHomeId;
+                return Array.from({ length: GRID_ROWS * GRID_COLS }).map((_, i) => {
+                  const r = Math.floor(i / GRID_COLS);
+                  const c = i % GRID_COLS;
+                  const key = `${r},${c}`;
+                  const entity = getEntityAt(r, c);
+                  const isW = isWall(r, c);
+                  const isPath = pathTrace.has(key);
+                  const isFuturePath = futurePathSet.has(key);
 
-              // Dynamic Classes
-              let cellClass = `w-8 h-8 flex items-center justify-center text-[10px] relative transition-all duration-300 cursor-pointer select-none `;
+                  const isSelectedHome = entity?.id === selectedHomeId;
 
-              if (isW) cellClass += COLORS.WALL;
-              else if (isPath) cellClass += ` ${COLORS.PATH} z-10`;
-              else cellClass += ` ${COLORS.EMPTY} hover:bg-slate-200 dark:hover:bg-slate-700`;
+                  // Dynamic Classes
+                  let cellClass = `w-8 h-8 flex items-center justify-center text-[10px] relative transition-all duration-300 cursor-pointer select-none `;
 
-              if (isSelectedHome) cellClass += ` ${COLORS.HIGHLIGHT_HOME}`;
+                  if (isW) cellClass += COLORS.WALL;
+                  else if (isFuturePath) cellClass += ` ${COLORS.FUTURE_PATH} z-0`; // Future path
+                  else if (isPath) cellClass += ` ${COLORS.PATH} z-10`; // History path overrides future if overlapping? or mix? Let's check logic.
+                  // Actually, Future path should probably be below history or same?
+                  // If I check isFuturePath first in the chain, it might get overwritten by isPath if I use else-if.
+                  // Let's use additive classes if possible or specific priority.
 
-              return (
-                <div
-                  key={key}
-                  className={cellClass}
-                  onMouseDown={() => handleCellClick(r, c)}
-                  onMouseEnter={(e) => { if (e.buttons === 1 && mode === 'WALL') handleCellClick(r, c); }}
-                >
-                  {isW && <WallIcon />}
+                  if (!isW && !isFuturePath && !isPath) cellClass += ` ${COLORS.EMPTY} hover:bg-slate-200 dark:hover:bg-slate-700`;
 
-                  {entity && (
-                    <div className={`
-                      w-7 h-7 rounded-md flex flex-col items-center justify-center shadow-lg transform transition-transform duration-300
-                      ${entity.type === 'RIDER' ?
-                        (entity as Rider).status === 'IDLE' ? COLORS.RIDER_IDLE :
-                          (entity as Rider).status === 'WAITING_FOR_FOOD' ? COLORS.RIDER_WAITING : COLORS.RIDER_BUSY
-                        : entity.color}
-                      ${entity.type === 'RIDER' && !isPath ? 'scale-90 hover:scale-110' : ''}
-                      ${entity.type === 'RIDER' ? 'rounded-full' : ''}
-                    `}>
-                      <span className="opacity-90 scale-75">
-                        {entity.type === 'HOME' && <HomeIcon />}
-                        {entity.type === 'HOTEL' && <HotelIcon />}
-                        {entity.type === 'RIDER' && <RiderIcon />}
-                      </span>
-                      {entity.type === 'RIDER' && (entity as Rider).assignedOrderIds.length > 0 && (
-                        <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[8px] w-3 h-3 flex items-center justify-center rounded-full border border-white">
-                          {(entity as Rider).assignedOrderIds.length}
-                        </span>
+                  if (isSelectedHome) cellClass += ` ${COLORS.HIGHLIGHT_HOME}`;
+
+                  // Selection Highlight
+                  if (entity?.id === selectedRiderId) {
+                    cellClass += " ring-2 ring-indigo-500 z-20";
+                  }
+
+                  return (
+                    <div
+                      key={key}
+                      className={cellClass}
+                      onMouseDown={() => handleCellClick(r, c)}
+                      onMouseEnter={(e) => { if (e.buttons === 1 && mode === 'WALL') handleCellClick(r, c); }}
+                    >
+                      {isW && <WallIcon />}
+
+                      {entity && (
+                        <div className={`
+                        w-7 h-7 rounded-md flex flex-col items-center justify-center shadow-lg transform transition-transform duration-300
+                        ${entity.type === 'RIDER' ?
+                            (entity as Rider).status === 'IDLE' ? COLORS.RIDER_IDLE :
+                              (entity as Rider).status === 'WAITING_FOR_FOOD' ? COLORS.RIDER_WAITING : COLORS.RIDER_BUSY
+                            : entity.color}
+                        ${entity.type === 'RIDER' && !isPath ? 'scale-90 hover:scale-110' : ''}
+                        ${entity.type === 'RIDER' ? 'rounded-full' : ''}
+                      `}>
+                          <span className="opacity-90 scale-75">
+                            {entity.type === 'HOME' && <HomeIcon />}
+                            {entity.type === 'HOTEL' && <HotelIcon />}
+                            {entity.type === 'RIDER' && <RiderIcon />}
+                          </span>
+                          {entity.type === 'RIDER' && (entity as Rider).assignedOrderIds.length > 0 && (
+                            <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[8px] w-3 h-3 flex items-center justify-center rounded-full border border-white">
+                              {(entity as Rider).assignedOrderIds.length}
+                            </span>
+                          )}
+                          <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[9px] font-bold text-slate-100 bg-slate-900/90 px-1 rounded border border-slate-600/50 whitespace-nowrap z-20 pointer-events-none shadow-md">
+                            {entity.label}
+                          </span>
+                        </div>
                       )}
-                      <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[9px] font-bold text-slate-100 bg-slate-900/90 px-1 rounded border border-slate-600/50 whitespace-nowrap z-20 pointer-events-none shadow-md">
-                        {entity.label}
-                      </span>
+
+                      {isPath && !entity && <div className="w-1.5 h-1.5 bg-pink-500/50 rounded-full"></div>}
+                      {isFuturePath && !entity && !isPath && <div className="w-1 h-1 bg-indigo-500/30 rounded-full animate-pulse"></div>}
                     </div>
+                  );
+                });
+              })()}
+            </div>
+          </div>
+
+          {/* Order Log */}
+          <div className="w-full bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-lg mt-2">
+            <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center">
+              <h3 className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                <span>📋</span> Active Orders
+              </h3>
+            </div>
+            <div className="overflow-x-auto max-h-60 overflow-y-auto">
+              <table className="w-full text-sm text-left text-slate-500 dark:text-slate-400">
+                <thead className="text-xs text-slate-700 dark:text-slate-300 uppercase bg-slate-100 dark:bg-slate-700/50 sticky top-0">
+                  <tr>
+                    <th className="px-6 py-3">Time</th>
+                    <th className="px-6 py-3">Rider</th>
+                    <th className="px-6 py-3">From</th>
+                    <th className="px-6 py-3">To</th>
+                    <th className="px-6 py-3 text-right">Distance</th>
+                    <th className="px-6 py-3 text-right">Time Taken</th>
+                    <th className="px-6 py-3 text-right">Cooking Time</th>
+                    <th className="px-6 py-3 text-right">Est. Delivery</th>
+                    <th className="px-6 py-3 text-right">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orders.length === 0 ? (
+                    <tr><td colSpan={6} className="px-6 py-8 text-center italic">No orders yet.</td></tr>
+                  ) : (
+                    orders.slice().reverse().map((o) => {
+                      const rider = riders.find(r => r.id === o.riderId);
+                      const hotel = hotels.find(h => h.id === o.hotelId);
+                      const home = homes.find(h => h.id === o.homeId);
+                      return (
+                        <tr key={o.id} className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700">
+                          <td className="px-6 py-4 font-mono">{o.timestamp}</td>
+                          <td className="px-6 py-4 font-bold">{rider?.label || 'Pending'}</td>
+                          <td className="px-6 py-4 text-amber-600">{hotel?.label}</td>
+                          <td className="px-6 py-4 text-emerald-600">{home?.label}</td>
+                          <td className="px-6 py-4 text-right font-mono">
+                            {o.blocksCovered ? `${o.blocksCovered} blk` : '-'}
+                          </td>
+                          <td className="px-6 py-4 text-right font-mono text-purple-600 font-bold">
+                            {o.actualDeliveryTimeMs ? `${(o.actualDeliveryTimeMs / 1000).toFixed(1)}s` : '-'}
+                          </td>
+                          <td className="px-6 py-4 text-right font-mono">
+                            {o.status === 'COOKING' ? (o.cookingTimeRemainingMs / 1000).toFixed(1) + 's' : '-'}
+                          </td>
+                          <td className="px-6 py-4 text-right font-mono text-indigo-600">
+                            {calculateEstimatedDeliveryTime(o) !== null ? calculateEstimatedDeliveryTime(o) + 's' : '...'}
+                          </td>
+                          <td className={`px-6 py-4 text-right ${getOrderStatusColor(o.status)}`}>{o.status}</td>
+                        </tr>
+                      );
+                    })
                   )}
-
-                  {isPath && !entity && <div className="w-1.5 h-1.5 bg-pink-500/50 rounded-full"></div>}
-                </div>
-              );
-            })}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
 
-        {/* Order Log */}
-        <div className="w-full bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-lg mt-2">
-          <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center">
-            <h3 className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
-              <span>📋</span> Active Orders
-            </h3>
+        {/* Right Sidebar: Priority Queue */}
+        <div className="w-80 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xl flex flex-col overflow-hidden self-stretch sticky top-24 max-h-[calc(100vh-8rem)]">
+          <div className="p-4 bg-indigo-50 dark:bg-slate-700/50 border-b border-indigo-100 dark:border-slate-600">
+            <h2 className="font-bold text-indigo-900 dark:text-indigo-100 flex items-center gap-2">
+              <span>🚀</span> Priority Queue
+            </h2>
+            <p className="text-xs text-indigo-600 dark:text-indigo-300 mt-1">
+              Rider Delivery Sequence
+            </p>
           </div>
-          <div className="overflow-x-auto max-h-60 overflow-y-auto">
-            <table className="w-full text-sm text-left text-slate-500 dark:text-slate-400">
-              <thead className="text-xs text-slate-700 dark:text-slate-300 uppercase bg-slate-100 dark:bg-slate-700/50 sticky top-0">
-                <tr>
-                  <th className="px-6 py-3">Time</th>
-                  <th className="px-6 py-3">Rider</th>
-                  <th className="px-6 py-3">From</th>
-                  <th className="px-6 py-3">To</th>
-                  <th className="px-6 py-3 text-right">Distance</th>
-                  <th className="px-6 py-3 text-right">Time Taken</th>
-                  <th className="px-6 py-3 text-right">Cooking Time</th>
-                  <th className="px-6 py-3 text-right">Est. Delivery</th>
-                  <th className="px-6 py-3 text-right">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders.length === 0 ? (
-                  <tr><td colSpan={6} className="px-6 py-8 text-center italic">No orders yet.</td></tr>
-                ) : (
-                  orders.slice().reverse().map((o) => {
-                    const rider = riders.find(r => r.id === o.riderId);
-                    const hotel = hotels.find(h => h.id === o.hotelId);
-                    const home = homes.find(h => h.id === o.homeId);
-                    return (
-                      <tr key={o.id} className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700">
-                        <td className="px-6 py-4 font-mono">{o.timestamp}</td>
-                        <td className="px-6 py-4 font-bold">{rider?.label || 'Pending'}</td>
-                        <td className="px-6 py-4 text-amber-600">{hotel?.label}</td>
-                        <td className="px-6 py-4 text-emerald-600">{home?.label}</td>
-                        <td className="px-6 py-4 text-right font-mono">
-                          {o.blocksCovered ? `${o.blocksCovered} blk` : '-'}
-                        </td>
-                        <td className="px-6 py-4 text-right font-mono text-purple-600 font-bold">
-                          {o.actualDeliveryTimeMs ? `${(o.actualDeliveryTimeMs / 1000).toFixed(1)}s` : '-'}
-                        </td>
-                        <td className="px-6 py-4 text-right font-mono">
-                          {o.status === 'COOKING' ? (o.cookingTimeRemainingMs / 1000).toFixed(1) + 's' : '-'}
-                        </td>
-                        <td className="px-6 py-4 text-right font-mono text-indigo-600">
-                          {calculateEstimatedDeliveryTime(o) !== null ? calculateEstimatedDeliveryTime(o) + 's' : '...'}
-                        </td>
-                        <td className={`px-6 py-4 text-right ${getOrderStatusColor(o.status)}`}>{o.status}</td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+
+          <div className="flex-1 overflow-y-auto p-4">
+            {selectedRiderId ? (
+              (() => {
+                const rider = riders.find(r => r.id === selectedRiderId);
+                if (!rider) return <div className="text-slate-400 italic text-sm text-center">Rider not found.</div>;
+
+                return (
+                  <div className="flex flex-col gap-4">
+                    <div className="flex items-center gap-3 pb-3 border-b border-slate-100 dark:border-slate-700">
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold shadow-md ${rider.color === COLORS.RIDER_IDLE ? 'bg-slate-400' : 'bg-indigo-500'}`}>
+                        {rider.label}
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-slate-700 dark:text-slate-200">Rider {rider.label}</h3>
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${rider.status === 'IDLE' ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-600'}`}>
+                          {rider.status.replace(/_/g, ' ')}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      {rider.deliveryQueue && rider.deliveryQueue.length > 0 ? (
+                        rider.deliveryQueue.map((orderId, index) => {
+                          const order = orders.find(o => o.id === orderId);
+                          if (!order) return null;
+                          const home = homes.find(h => h.id === order.homeId);
+
+                          // Check if currently targeting this one
+                          // Simplification: logic to show which one is next
+                          const isNext = index === 0 && rider.status === 'DELIVERING';
+
+                          return (
+                            <div key={orderId} className={`relative p-3 rounded-lg border flex items-center gap-3 transition-all ${isNext ? 'bg-indigo-50 border-indigo-200 shadow-md scale-105' : 'bg-slate-50 dark:bg-slate-700 border-slate-200 dark:border-slate-600 opacity-80'}`}>
+                              <div className="flex-none font-mono text-xl text-slate-300 dark:text-slate-600 font-bold">
+                                {index + 1}
+                              </div>
+                              <div className="flex-1">
+                                <div className="text-xs text-slate-500 dark:text-slate-400 uppercase font-bold tracking-wider mb-0.5">Deliver To</div>
+                                <div className="font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2">
+                                  <HomeIcon /> <span>{home?.label || '???'}</span>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${order.status === 'DELIVERED' ? 'bg-green-100 text-green-600' : 'bg-amber-100 text-amber-600'}`}>
+                                  {order.status}
+                                </span>
+                              </div>
+                              {isNext && <div className="absolute -left-1 top-1/2 -translate-y-1/2 w-2 h-8 bg-indigo-500 rounded-r-full"></div>}
+                            </div>
+                          )
+                        })
+                      ) : (
+                        <div className="text-center py-8 text-slate-400 text-sm">
+                          <div className="mb-2 text-2xl">📦</div>
+                          No active delivery queue.
+                        </div>
+                      )}
+
+                      {/* Pending Unsorted Orders (Waiting at Hotel) */}
+                      {rider.status === 'WAITING_FOR_FOOD' && rider.assignedOrderIds.length > 0 && (
+                        <div className="mt-4 pt-4 border-t border-dashed border-slate-300 dark:border-slate-600">
+                          <p className="text-xs font-bold text-amber-500 mb-2">Preparing Batch...</p>
+                          <div className="flex flex-wrap gap-2">
+                            {rider.assignedOrderIds.map(oid => {
+                              const o = orders.find(x => x.id === oid);
+                              const h = homes.find(x => x.id === o?.homeId);
+                              return (
+                                <span key={oid} className="text-xs bg-amber-50 text-amber-700 px-2 py-1 rounded border border-amber-100">
+                                  {h?.label} ({o?.status})
+                                </span>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-slate-400 p-4 text-center">
+                <div className="text-4xl mb-3 opacity-50"><RiderIcon /></div>
+                <p className="text-sm">Select a Rider on the grid to view their Delivery Priority Queue.</p>
+              </div>
+            )}
           </div>
         </div>
 
-      </main>
-    </div>
+      </main >
+    </div >
   );
 };
 

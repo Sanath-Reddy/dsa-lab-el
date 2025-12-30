@@ -9,13 +9,13 @@ interface AlgorithmRaceProps {
     onClose: () => void;
     start: Position;
     end: Position;
-    intermediate?: Position;
+    waypoints?: Position[];
     walls: Set<string>;
 }
 
 const GRID_SIZE = 20; // 20x20 grid for local rendering
 
-const AlgorithmRace: React.FC<AlgorithmRaceProps> = ({ onClose, start, end, walls, intermediate }) => {
+const AlgorithmRace: React.FC<AlgorithmRaceProps> = ({ onClose, start, end, walls, waypoints = [] }) => {
     const [results, setResults] = useState<ComparisonResult[] | null>(null);
     const [animationSteps, setAnimationSteps] = useState<number>(0);
     const [isFinished, setIsFinished] = useState(false);
@@ -27,13 +27,13 @@ const AlgorithmRace: React.FC<AlgorithmRaceProps> = ({ onClose, start, end, wall
     // Prepare Data
     useEffect(() => {
         // Run comparison immediately to get data
-        const res = compareAlgorithms(start, end, walls, intermediate);
+        const res = compareAlgorithms(start, end, walls, waypoints);
         setResults(res);
         // Find max steps needed
         const max = Math.max(...res.map(r => r.metrics?.visitedOrder.length || 0));
         setAnimationSteps(0);
         setIsPlaying(true);
-    }, [start, end, walls, intermediate]);
+    }, [start, end, walls, waypoints]);
 
     // Animation Loop
     useEffect(() => {
@@ -106,10 +106,10 @@ const AlgorithmRace: React.FC<AlgorithmRaceProps> = ({ onClose, start, end, wall
 
             drawPoint(start, COLORS.RIDER_IDLE);
             drawPoint(end, COLORS.HOME);
-            if (intermediate) {
+            waypoints.forEach(wp => {
                 ctx.fillStyle = COLORS.HOTEL;
-                ctx.fillRect(intermediate.c * CELL_SIZE + 2, intermediate.r * CELL_SIZE + 2, CELL_SIZE - 4, CELL_SIZE - 4);
-            }
+                ctx.fillRect(wp.c * CELL_SIZE + 2, wp.r * CELL_SIZE + 2, CELL_SIZE - 4, CELL_SIZE - 4);
+            });
 
             if (!res.metrics) return;
 
@@ -151,7 +151,7 @@ const AlgorithmRace: React.FC<AlgorithmRaceProps> = ({ onClose, start, end, wall
                         ALGORITHM RACE
                     </h1>
                     <p className="text-slate-400 text-sm font-medium">
-                        {intermediate ? "Full Delivery: Rider ➔ Hotel ➔ Home" : "Direct Path: Point A ➔ Point B"}
+                        {waypoints.length > 0 ? "Multi-Stop Delivery Route" : "Direct Path: Point A ➔ Point B"}
                     </p>
                 </div>
                 <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors">

@@ -22,6 +22,7 @@ export interface Rider extends Entity {
   targetEntityId: string | null; // The ID of where they are going (Hotel or Home)
   speed: number; // Cells per tick (e.g., 0.5 to 2.0)
   movementAccumulator: number; // To track fractional movement
+  deliveryQueue?: string[]; // Order IDs in sequence of delivery
 }
 
 export type OrderStatus = 'COOKING' | 'READY' | 'DELIVERED';
@@ -40,7 +41,7 @@ export interface Order {
   blocksCovered?: number; // Distance from Hotel to Home
 }
 
-export type GridMode = 'WALL' | 'RIDER' | 'HOTEL' | 'HOME' | 'ORDER';
+export type GridMode = 'SELECT' | 'WALL' | 'RIDER' | 'HOTEL' | 'HOME' | 'ORDER';
 
 export type Algorithm = 'DIJKSTRA' | 'GREEDY' | 'ASTAR';
 
