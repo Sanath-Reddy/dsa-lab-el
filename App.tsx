@@ -188,6 +188,12 @@ const App: React.FC = () => {
             }
           }
 
+          // Mark pickup stats
+          myOrders.forEach(o => {
+            const idx = nextOrders.findIndex(no => no.id === o.id);
+            if (idx !== -1) nextOrders[idx].pickupTime = Date.now();
+          });
+
           ridersChanged = true;
           return {
             ...rider,
@@ -217,6 +223,17 @@ const App: React.FC = () => {
           const orderIdx = nextOrders.findIndex(o => o.id === deliveredOrder.id);
           if (orderIdx !== -1) {
             nextOrders[orderIdx] = { ...nextOrders[orderIdx], status: 'DELIVERED' };
+
+            // STATS
+            if (nextOrders[orderIdx].pickupTime) {
+              nextOrders[orderIdx].actualDeliveryTimeMs = Date.now() - nextOrders[orderIdx].pickupTime!;
+            }
+            const hotel = hotels.find(h => h.id === nextOrders[orderIdx].hotelId);
+            const home = homes.find(h => h.id === nextOrders[orderIdx].homeId);
+            if (hotel && home) {
+              nextOrders[orderIdx].blocksCovered = getManhattanDistance(hotel.pos, home.pos);
+            }
+
             setOrders(nextOrders); // Immediate update for UI responsiveness
           }
         }
@@ -918,6 +935,8 @@ const App: React.FC = () => {
                   <th className="px-6 py-3">Rider</th>
                   <th className="px-6 py-3">From</th>
                   <th className="px-6 py-3">To</th>
+                  <th className="px-6 py-3 text-right">Distance</th>
+                  <th className="px-6 py-3 text-right">Time Taken</th>
                   <th className="px-6 py-3 text-right">Cooking Time</th>
                   <th className="px-6 py-3 text-right">Est. Delivery</th>
                   <th className="px-6 py-3 text-right">Status</th>
@@ -937,6 +956,12 @@ const App: React.FC = () => {
                         <td className="px-6 py-4 font-bold">{rider?.label || 'Pending'}</td>
                         <td className="px-6 py-4 text-amber-600">{hotel?.label}</td>
                         <td className="px-6 py-4 text-emerald-600">{home?.label}</td>
+                        <td className="px-6 py-4 text-right font-mono">
+                          {o.blocksCovered ? `${o.blocksCovered} blk` : '-'}
+                        </td>
+                        <td className="px-6 py-4 text-right font-mono text-purple-600 font-bold">
+                          {o.actualDeliveryTimeMs ? `${(o.actualDeliveryTimeMs / 1000).toFixed(1)}s` : '-'}
+                        </td>
                         <td className="px-6 py-4 text-right font-mono">
                           {o.status === 'COOKING' ? (o.cookingTimeRemainingMs / 1000).toFixed(1) + 's' : '-'}
                         </td>

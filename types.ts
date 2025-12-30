@@ -34,6 +34,10 @@ export interface Order {
   status: OrderStatus;
   cookingTimeRemainingMs: number;
   timestamp: string;
+  // Stats
+  pickupTime?: number; // Timestamp when status changed to DELIVERING
+  actualDeliveryTimeMs?: number; // Duration from Pickup to Delivery
+  blocksCovered?: number; // Distance from Hotel to Home
 }
 
 export type GridMode = 'WALL' | 'RIDER' | 'HOTEL' | 'HOME' | 'ORDER';
