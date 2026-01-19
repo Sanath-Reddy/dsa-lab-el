@@ -1,4 +1,4 @@
-import { Position } from '../types';
+import { Position, Rider } from '../types';
 import { getManhattanDistance } from './pathfinding';
 
 // --- HUNGARIAN ALGORITHM SIMULATION (Greedy closest-first fallback for simplicity/demo if N is small) ---
@@ -14,10 +14,11 @@ export interface AssignmentResult {
 }
 
 export const solveAssignment = (
-    riderPositions: Position[],
-    orderPositions: Position[]
+    riders: Rider[],
+    orderPositions: Position[],
+    alpha: number = 0 // Fairness weight. 0 = Efficiency, >0 = Fairness
 ): AssignmentResult[] => {
-    const n = riderPositions.length;
+    const n = riders.length;
     const m = orderPositions.length;
 
     // Calculate Cost Matrix
@@ -25,7 +26,12 @@ export const solveAssignment = (
     for (let i = 0; i < n; i++) {
         const row: number[] = [];
         for (let j = 0; j < m; j++) {
-            row.push(getManhattanDistance(riderPositions[i], orderPositions[j]));
+            // Cost = Distance + (Alpha * Current Earnings)
+            // We normalize distance (blocks) and earnings ($)
+            // 1 block walk is roughly "bad". $1 earning is roughly "bad" (if we want equity).
+            const dist = getManhattanDistance(riders[i].pos, orderPositions[j]);
+            const earningsPenalty = riders[i].totalEarnings * alpha;
+            row.push(dist + earningsPenalty);
         }
         costMatrix.push(row);
     }

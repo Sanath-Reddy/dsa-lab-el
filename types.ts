@@ -22,6 +22,10 @@ export interface Rider extends Entity {
   targetEntityId: string | null; // The ID of where they are going (Hotel or Home)
   speed: number; // Cells per tick (e.g., 0.5 to 2.0)
   movementAccumulator: number; // To track fractional movement
+  // Stats
+  totalEarnings: number; // in $
+  totalOrdersDelivered: number;
+  totalDistanceTraveled: number; // in blocks
   deliveryQueue?: string[]; // Order IDs in sequence of delivery
 }
 

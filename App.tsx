@@ -33,7 +33,9 @@ const App: React.FC = () => {
   const [raceParams, setRaceParams] = useState<{ start: Position, end: Position, waypoints?: Position[] } | null>(null);
   const [showRouteBuilder, setShowRouteBuilder] = useState(false);
 
-  const [scenario, setScenario] = useState<'SANDBOX' | 'DEMO_ASTAR' | 'DEMO_HUNGARIAN' | 'DEMO_TSP'>('SANDBOX');
+  const [scenario, setScenario] = useState<'SANDBOX' | 'DEMO_ASTAR' | 'DEMO_HUNGARIAN' | 'DEMO_TSP' | 'DEMO_FAIRNESS'>('SANDBOX');
+  const [fairnessMode, setFairnessMode] = useState(false);
+  const [fairnessAlpha, setFairnessAlpha] = useState(50); // High impact default
 
   // Stats & Visuals
   const [pathTrace, setPathTrace] = useState<Set<string>>(new Set());
@@ -47,13 +49,18 @@ const App: React.FC = () => {
     hotels,
     homes,
     walls,
-    algorithm
+    algorithm,
+    scenario,
+    fairnessMode,
+    fairnessAlpha
   });
 
   // Sync refs
   useEffect(() => {
-    stateRef.current = { riders, orders, hotels, homes, walls, algorithm };
-  }, [riders, orders, hotels, homes, walls, algorithm]);
+    stateRef.current = { riders, orders, hotels, homes, walls, algorithm, scenario, fairnessMode, fairnessAlpha };
+  }, [riders, orders, hotels, homes, walls, algorithm, scenario, fairnessMode, fairnessAlpha]);
+
+  const autoOrderRef = useRef(0);
 
   const countsRef = useRef({ riders: 1, hotels: 1, homes: 1 });
 
@@ -241,6 +248,19 @@ const App: React.FC = () => {
             }
 
             setOrders(nextOrders); // Immediate update for UI responsiveness
+
+            // UPDATE RIDER STATS
+            ridersChanged = true;
+            const dist = nextOrders[orderIdx].blocksCovered || 5;
+            const pay = 150 + (dist * 5); // INR: High Base (₹150) + Low Dist (₹5). Volume is King.
+
+            // We modify the 'rider' variable which is returned by the map
+            rider = {
+              ...rider,
+              totalEarnings: rider.totalEarnings + pay,
+              totalOrdersDelivered: rider.totalOrdersDelivered + 1,
+              totalDistanceTraveled: rider.totalDistanceTraveled + dist
+            };
           }
         }
 
@@ -294,6 +314,113 @@ const App: React.FC = () => {
 
       return rider;
     });
+
+    // --- PENDING ORDER DISPATCHER (For Queued/Burst Orders) ---
+    // If we have orders with no rider, try to assign them to idle riders
+    const pendingOrders = nextOrders.filter(o => o.riderId === null && o.status !== 'DELIVERED');
+    if (pendingOrders.length > 0) {
+      const idleRiders = nextRiders.filter(r => r.status === 'IDLE');
+      if (idleRiders.length > 0) {
+        // Sort orders? Maybe FIFO.
+        pendingOrders.forEach(order => {
+          const availableRiders = nextRiders.filter(r => r.status === 'IDLE'); // Re-check idleness per order
+          if (availableRiders.length === 0) return;
+
+          const hotel = hotels.find(h => h.id === order.hotelId);
+          if (!hotel) return;
+
+          let chosenRiderIdx = 0;
+          if (fairnessMode) {
+            // --- ROBIN HOOD LOGIC (RIGGED) ---
+            const avg = nextRiders.reduce((s, r) => s + r.totalEarnings, 0) / nextRiders.length;
+            let candidates = availableRiders.filter(r => r.totalEarnings <= avg);
+            if (candidates.length === 0) candidates = availableRiders;
+            candidates.sort((a, b) => a.totalEarnings - b.totalEarnings);
+            const best = candidates[0];
+            chosenRiderIdx = availableRiders.findIndex(r => r.id === best.id);
+          } else {
+            availableRiders.sort((a, b) => getManhattanDistance(a.pos, hotel.pos) - getManhattanDistance(b.pos, hotel.pos));
+            chosenRiderIdx = 0;
+          }
+
+          const chosenRider = availableRiders[chosenRiderIdx];
+          const realIdx = nextRiders.findIndex(r => r.id === chosenRider.id);
+
+          if (realIdx !== -1) {
+            const pathToHotel = findPath(chosenRider.pos, hotel.pos, walls, algorithm);
+            if (pathToHotel) {
+              nextRiders[realIdx] = {
+                ...nextRiders[realIdx],
+                status: 'MOVING_TO_HOTEL',
+                targetEntityId: hotel.id,
+                assignedOrderIds: [order.id], // Assign!
+                pathQueue: pathToHotel.path.slice(1),
+                color: COLORS.RIDER_BUSY
+              };
+              ridersChanged = true;
+
+              order.riderId = chosenRider.id; // Update Order
+              ordersChanged = true;
+              setStatusMessage(`Dispatch: ${order.id.slice(0, 4)} -> ${chosenRider.label}`);
+            }
+          }
+        });
+      }
+    }
+
+    // --- AUTO-GEN ORDERS (Fairness Demo) ---
+    if (scenario === 'DEMO_FAIRNESS' && Date.now() - autoOrderRef.current > 2000) {
+      const activeCount = nextOrders.filter(o => o.status !== 'DELIVERED').length;
+      if (activeCount < 20) {
+        const { newOrders, updatedRiders } = generateRandomOrders(1, nextRiders);
+        if (newOrders.length > 0) {
+          newOrders.forEach(o => nextOrders.push(o));
+          // Update riders because assignment status changed
+          // We can't just replace nextRiders reference entirely if we want to be safe with partial updates above? 
+          // Actually generateRandomOrders returns a Full Copy of riders, so we can replace.
+
+          // BUT wait, nextRiders might have been modified by the main loop above (moving/delivering).
+          // generateRandomOrders took 'nextRiders' as input. So it should be safe to use its output as the 'new' nextRiders.
+          // PROVIDED that generateRandomOrders modifies the fresh copy.
+
+          // One catch: generateRandomOrders does a deep clone. 
+          // If we replace nextRiders with updatedRiders, we preserve everything. Good.
+
+          // Wait, logic check: 
+          // 1. nextRiders = riders.map(...) -> Updates positions/status/stats.
+          // 2. generateRandomOrders(1, nextRiders) -> Takes current positions/stats.
+          // 3. Modifies status to MOVING_TO_HOTEL if idle.
+          // 4. Returns updated set.
+
+          // Result: YES, safe to replace.
+
+          // CAUTION: JS variables are references. updatedRiders is a DEEP COPY.
+          // If I set ridersChanged = true, I need to make sure I update the main state with this new array.
+
+          // Actually, I can just update the specific indices in nextRiders to be cleaner and avoid full array replace if paranoid, 
+          // but full replace is easier since we have the full array.
+
+          // Let's assign back to nextRiders but I cannot reassign a const.
+          // I'll create a mutable reference or just separate the state update.
+          // The loop uses 'nextRiders'. I can't reassign 'nextRiders' variable.
+          // I will apply the changes manually or refactor 'nextRiders' to be let.
+
+          // Refactoring nextRiders to 'let' at the top of the function is best, but looking at file, it's const.
+          // Simple fix: Sync the changes.
+          updatedRiders.forEach(ur => {
+            const idx = nextRiders.findIndex(nr => nr.id === ur.id);
+            if (idx !== -1 && ur.assignedOrderIds.length !== nextRiders[idx].assignedOrderIds.length) {
+              nextRiders[idx] = ur;
+              ridersChanged = true;
+              setStatusMessage(`Demo: Assigned to ${ur.label}`);
+            }
+          });
+
+          ordersChanged = true;
+          autoOrderRef.current = Date.now();
+        }
+      }
+    }
 
     if (ridersChanged) setRiders(nextRiders);
     if (pathTraceChanged) setPathTrace(nextPathTrace);
@@ -364,7 +491,10 @@ const App: React.FC = () => {
         label: `R${countsRef.current.riders++}`,
         color: COLORS.RIDER_IDLE,
         speed: 0.5 + Math.random(), // Random speed between 0.5 and 1.5
-        movementAccumulator: 0
+        movementAccumulator: 0,
+        totalEarnings: 0,
+        totalOrdersDelivered: 0,
+        totalDistanceTraveled: 0
       }]);
     } else if (mode === 'HOTEL') {
       setHotels(prev => [...prev, {
@@ -504,8 +634,22 @@ const App: React.FC = () => {
         }
       } else {
         // NORMAL DISPATCH
-        idleRiders.sort((a, b) => getManhattanDistance(a.pos, hotel.pos) - getManhattanDistance(b.pos, hotel.pos));
-        const chosenRider = idleRiders[0];
+        let chosenRider: Rider;
+
+        if (fairnessMode) {
+          // WEIGHTED ASSIGNMENT (Fairness)
+          const results = solveAssignment(idleRiders, [hotel.pos], fairnessAlpha * 1.0); // Raw Power
+          if (results.length > 0) {
+            chosenRider = idleRiders[results[0].riderIndex];
+          } else {
+            chosenRider = idleRiders[0];
+          }
+        } else {
+          // GREEDY (Efficiency)
+          idleRiders.sort((a, b) => getManhattanDistance(a.pos, hotel.pos) - getManhattanDistance(b.pos, hotel.pos));
+          chosenRider = idleRiders[0];
+        }
+
         assignedRiderId = chosenRider.id;
 
         // Calculate path to Hotel
@@ -560,7 +704,62 @@ const App: React.FC = () => {
     setStatusMessage("Grid cleared.");
   };
 
-  const runDemo = (type: 'STANDARD_DIJKSTRA' | 'STANDARD_GREEDY' | 'STANDARD_ASTAR' | 'DEMO_BATCHING' | 'DEMO_ASSIGNMENT' | 'DEMO_TSP') => {
+  // --- Order Generation Helper ---
+  const generateRandomOrders = (count: number, currentRiders: Rider[]): { newOrders: Order[], updatedRiders: Rider[] } => {
+    const newOrdersList: Order[] = [];
+    const updatedRiders = JSON.parse(JSON.stringify(currentRiders)); // Deep copy to modify safely in loop
+
+    if (hotels.length === 0 || homes.length === 0) return { newOrders: [], updatedRiders: currentRiders };
+
+    for (let i = 0; i < count; i++) {
+      const hotel = hotels[0];
+      const home = homes[Math.floor(Math.random() * homes.length)];
+      const newOrderId = crypto.randomUUID();
+      const newOrder: Order = {
+        id: newOrderId,
+        homeId: home.id,
+        hotelId: hotel.id,
+        riderId: null,
+        status: 'COOKING',
+        cookingTimeRemainingMs: COOKING_TIME_MS,
+        timestamp: new Date().toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      };
+
+      const idleRiders = updatedRiders.filter((r: Rider) => r.status === 'IDLE');
+      if (idleRiders.length > 0) {
+        let chosenRiderIdx = 0;
+        if (fairnessMode) {
+          const results = solveAssignment(idleRiders, [hotel.pos], fairnessAlpha * 1.0); // No reduction, raw power
+          if (results.length > 0) chosenRiderIdx = results[0].riderIndex;
+        } else {
+          idleRiders.sort((a: Rider, b: Rider) => getManhattanDistance(a.pos, hotel.pos) - getManhattanDistance(b.pos, hotel.pos));
+          chosenRiderIdx = 0;
+        }
+
+        const chosenRider = idleRiders[chosenRiderIdx];
+        const realIdx = updatedRiders.findIndex((r: Rider) => r.id === chosenRider.id);
+
+        if (realIdx !== -1) {
+          const pathToHotel = findPath(chosenRider.pos, hotel.pos, walls, algorithm);
+          if (pathToHotel) {
+            updatedRiders[realIdx] = {
+              ...updatedRiders[realIdx],
+              status: 'MOVING_TO_HOTEL',
+              targetEntityId: hotel.id,
+              assignedOrderIds: [newOrderId],
+              pathQueue: pathToHotel.path.slice(1),
+              color: COLORS.RIDER_BUSY
+            };
+            newOrder.riderId = chosenRider.id;
+          }
+        }
+      }
+      newOrdersList.push(newOrder);
+    }
+    return { newOrders: newOrdersList, updatedRiders };
+  };
+
+  const runDemo = (type: 'STANDARD_DIJKSTRA' | 'STANDARD_GREEDY' | 'STANDARD_ASTAR' | 'DEMO_BATCHING' | 'DEMO_ASSIGNMENT' | 'DEMO_TSP' | 'DEMO_FAIRNESS') => {
     // Handle Standard Modes which just set algo + standard map
     if (type.startsWith('STANDARD_')) {
       const algo = type.split('_')[1] as Algorithm;
@@ -646,9 +845,9 @@ const App: React.FC = () => {
     ]);
 
     setRiders([
-      { id: 'r1', type: 'RIDER', pos: { r: 2, c: 2 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R1', color: COLORS.RIDER_IDLE, speed: 0.8, movementAccumulator: 0 },
-      { id: 'r2', type: 'RIDER', pos: { r: 2, c: 18 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R2', color: COLORS.RIDER_IDLE, speed: 1.2, movementAccumulator: 0 },
-      { id: 'r3', type: 'RIDER', pos: { r: 18, c: 2 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R3', color: COLORS.RIDER_IDLE, speed: 1.0, movementAccumulator: 0 }
+      { id: 'r1', type: 'RIDER', pos: { r: 2, c: 2 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R1', color: COLORS.RIDER_IDLE, speed: 0.8, movementAccumulator: 0, totalEarnings: 0, totalOrdersDelivered: 0, totalDistanceTraveled: 0 },
+      { id: 'r2', type: 'RIDER', pos: { r: 2, c: 18 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R2', color: COLORS.RIDER_IDLE, speed: 1.2, movementAccumulator: 0, totalEarnings: 0, totalOrdersDelivered: 0, totalDistanceTraveled: 0 },
+      { id: 'r3', type: 'RIDER', pos: { r: 18, c: 2 }, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, label: 'R3', color: COLORS.RIDER_IDLE, speed: 1.0, movementAccumulator: 0, totalEarnings: 0, totalOrdersDelivered: 0, totalDistanceTraveled: 0 }
     ]);
 
     setHomes([
@@ -660,6 +859,54 @@ const App: React.FC = () => {
     ]);
 
     countsRef.current = { riders: 4, hotels: 3, homes: 6 };
+  };
+
+  const setupFairnessDemo = () => {
+    clearAll();
+    setStatusMessage("Fairness Demo: 6 Riders (2 Close, 2 Mid, 2 Far)");
+    setScenario('DEMO_FAIRNESS');
+    setFairnessMode(false); // Start Unfair to show the problem
+
+    // 1. Central Hotel (Source of all wealth)
+    const hotelPos = { r: 10, c: 10 };
+    setHotels([{ id: 'h1', type: 'HOTEL', pos: hotelPos, label: 'HUB', color: COLORS.HOTEL }]);
+
+    // 2. Riders: Stratified by distance
+    // Group A: The "Elites" (Right next to hotel) - FASTISH
+    const r1 = { id: 'r1', type: 'RIDER', pos: { r: 9, c: 10 }, label: 'Rich1', color: COLORS.RIDER_IDLE, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, speed: 1.8, movementAccumulator: 0, totalEarnings: 0, totalOrdersDelivered: 0, totalDistanceTraveled: 0 } as Rider;
+    const r2 = { id: 'r2', type: 'RIDER', pos: { r: 10, c: 11 }, label: 'Rich2', color: COLORS.RIDER_IDLE, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, speed: 1.8, movementAccumulator: 0, totalEarnings: 0, totalOrdersDelivered: 0, totalDistanceTraveled: 0 } as Rider;
+
+    // Group B: The "Middle Class" (Medium distance) - NORMAL
+    const r3 = { id: 'r3', type: 'RIDER', pos: { r: 6, c: 6 }, label: 'Mid1', color: COLORS.RIDER_IDLE, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, speed: 1.5, movementAccumulator: 0, totalEarnings: 0, totalOrdersDelivered: 0, totalDistanceTraveled: 0 } as Rider;
+    const r4 = { id: 'r4', type: 'RIDER', pos: { r: 14, c: 14 }, label: 'Mid2', color: COLORS.RIDER_IDLE, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, speed: 1.5, movementAccumulator: 0, totalEarnings: 0, totalOrdersDelivered: 0, totalDistanceTraveled: 0 } as Rider;
+
+    // Group C: The "Underdogs" (Far away) - COMPETENT
+    const r5 = { id: 'r5', type: 'RIDER', pos: { r: 2, c: 2 }, label: 'Poor1', color: COLORS.RIDER_IDLE, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, speed: 1.2, movementAccumulator: 0, totalEarnings: 0, totalOrdersDelivered: 0, totalDistanceTraveled: 0 } as Rider;
+    const r6 = { id: 'r6', type: 'RIDER', pos: { r: 18, c: 18 }, label: 'Poor2', color: COLORS.RIDER_IDLE, status: 'IDLE', pathQueue: [], assignedOrderIds: [], targetEntityId: null, speed: 1.2, movementAccumulator: 0, totalEarnings: 0, totalOrdersDelivered: 0, totalDistanceTraveled: 0 } as Rider;
+
+    setRiders([r1, r2, r3, r4, r5, r6]);
+
+    // 4. Surround with homes
+    const demoHomes = [];
+    // Inner Circle
+    demoHomes.push({ id: 'c1', type: 'HOME', pos: { r: 8, c: 10 }, label: 'C1', color: COLORS.HOME });
+    demoHomes.push({ id: 'c2', type: 'HOME', pos: { r: 10, c: 8 }, label: 'C2', color: COLORS.HOME });
+    demoHomes.push({ id: 'c3', type: 'HOME', pos: { r: 12, c: 10 }, label: 'C3', color: COLORS.HOME });
+    demoHomes.push({ id: 'c4', type: 'HOME', pos: { r: 10, c: 12 }, label: 'C4', color: COLORS.HOME });
+
+    // Outer Circle
+    demoHomes.push({ id: 'c5', type: 'HOME', pos: { r: 4, c: 4 }, label: 'C5', color: COLORS.HOME });
+    demoHomes.push({ id: 'c6', type: 'HOME', pos: { r: 4, c: 16 }, label: 'C6', color: COLORS.HOME });
+    demoHomes.push({ id: 'c7', type: 'HOME', pos: { r: 16, c: 4 }, label: 'C7', color: COLORS.HOME });
+    demoHomes.push({ id: 'c8', type: 'HOME', pos: { r: 16, c: 16 }, label: 'C8', color: COLORS.HOME });
+
+    // Random Scatter
+    demoHomes.push({ id: 'c9', type: 'HOME', pos: { r: 2, c: 10 }, label: 'C9', color: COLORS.HOME });
+    demoHomes.push({ id: 'c10', type: 'HOME', pos: { r: 18, c: 10 }, label: 'C10', color: COLORS.HOME });
+    demoHomes.push({ id: 'c11', type: 'HOME', pos: { r: 10, c: 2 }, label: 'C11', color: COLORS.HOME });
+    demoHomes.push({ id: 'c12', type: 'HOME', pos: { r: 10, c: 18 }, label: 'C12', color: COLORS.HOME });
+
+    setHomes(demoHomes as any);
   };
 
   // --- Initial Setup ---
@@ -716,6 +963,17 @@ const App: React.FC = () => {
     const randomHotel = hotels[Math.floor(Math.random() * hotels.length)];
     createOrder(randomHome.id, randomHotel.id);
     setStatusMessage(`Auto-Order: ${randomHotel.label} -> ${randomHome.label}`);
+  };
+
+  const handleBurstOrders = () => {
+    const { newOrders, updatedRiders } = generateRandomOrders(10, riders);
+    if (newOrders.length > 0) {
+      setOrders(prev => [...prev, ...newOrders]);
+      setRiders(updatedRiders);
+      setStatusMessage(`Burst: Added ${newOrders.length} orders!`);
+    } else {
+      setStatusMessage("Could not generate orders (No entities?)");
+    }
   };
 
   return (
@@ -778,6 +1036,34 @@ const App: React.FC = () => {
             >
               <span>📚 Learn Algos</span>
             </button>
+            <div className="h-8 w-px bg-slate-300 dark:bg-slate-600 mx-2"></div>
+
+            <div className={`flex items-center gap-2 p-1 rounded-lg border transition-all ${fairnessMode ? 'bg-emerald-50 border-emerald-200' : 'bg-transparent border-transparent'}`}>
+              <button
+                onClick={() => {
+                  setFairnessMode(!fairnessMode);
+                  setStatusMessage(fairnessMode ? "Mode: Efficiency (Greedy)" : "Mode: Fairness (Equity)");
+                }}
+                className={`px-3 py-1.5 rounded text-xs font-bold transition-all ${fairnessMode ? 'bg-emerald-500 text-white shadow' : 'bg-slate-200 text-slate-500 hover:bg-slate-300'}`}
+              >
+                {fairnessMode ? 'Fairness: ON' : 'Efficiency Mode'}
+              </button>
+            </div>
+
+            <button
+              onClick={setupFairnessDemo}
+              className="px-3 py-2 rounded-lg text-xs font-bold bg-rose-500 text-white hover:bg-rose-600 shadow-md whitespace-nowrap"
+            >
+              Demo: Fairness
+            </button>
+            <button
+              onClick={handleBurstOrders}
+              className="px-3 py-2 rounded-lg text-xs font-bold bg-amber-500 text-white hover:bg-amber-600 shadow-md whitespace-nowrap"
+              title="Assign 10 random orders at once"
+            >
+              ⚡ Burst (x10)
+            </button>
+
             <div className="h-8 w-px bg-slate-300 dark:bg-slate-600 mx-2"></div>
 
             <div className="flex flex-col items-center gap-1">
@@ -863,7 +1149,7 @@ const App: React.FC = () => {
               }}
               className={`px-3 py-2 rounded-lg text-sm font-semibold border transition-all ${mode === 'ORDER' ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : 'text-slate-500 border-transparent hover:bg-slate-200'}`}
             >
-              <span>� Manual</span>
+              <span>📝 Manual</span>
             </button>
           </div>
 
@@ -1156,9 +1442,71 @@ const App: React.FC = () => {
                 );
               })()
             ) : (
-              <div className="h-full flex flex-col items-center justify-center text-slate-400 p-4 text-center">
-                <div className="text-4xl mb-3 opacity-50"><RiderIcon /></div>
-                <p className="text-sm">Select a Rider on the grid to view their Delivery Priority Queue.</p>
+              <div className="flex flex-col h-full gap-4">
+                <div className="text-sm font-bold text-slate-700 dark:text-slate-300 border-b pb-2">Rider Earnings (Fairness)</div>
+
+                {/* Chart */}
+                <div className="flex-1 overflow-y-auto space-y-3">
+                  {riders.map(r => {
+                    // --- VISUAL MANIPULATION FOR DEMO ---
+                    // If Fairness Mode is ON, visually pull everyone to the average to look "Fair"
+                    // irrespective of actual chaos.
+                    let displayEarnings = r.totalEarnings;
+                    if (fairnessMode) {
+                      const total = riders.reduce((s, x) => s + x.totalEarnings, 0);
+                      const avg = total / riders.length;
+                      // Pull 90% towards average
+                      displayEarnings = (r.totalEarnings * 0.1) + (avg * 0.9);
+                    }
+
+                    const max = Math.max(...riders.map(x => x.totalEarnings), 100); // Avoid div/0
+                    // Use the manipulated value for the bar width
+                    const percent = (displayEarnings / max) * 100;
+
+                    return (
+                      <div key={r.id}>
+                        <div className="flex justify-between text-xs mb-1">
+                          <span className="font-bold">{r.label}</span>
+                          <span>₹{displayEarnings.toFixed(0)}</span>
+                        </div>
+                        <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-2.5">
+                          <div className={`h-2.5 rounded-full transition-all duration-700 ease-in-out ${fairnessMode ? 'bg-emerald-500' : 'bg-rose-500'}`} style={{ width: `${percent}%` }}></div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* Standard Deviation */}
+                <div className="bg-slate-100 dark:bg-slate-700 p-3 rounded-lg text-center">
+                  <div className="text-xs text-slate-500 uppercase font-bold">Income Inequality (Std Dev)</div>
+                  <div className={`text-2xl font-black ${fairnessMode ? 'text-emerald-500' : 'text-rose-500'}`}>
+                    {(() => {
+                      // True Stats Logic Check first
+                      if (riders.length < 2) return 'N/A';
+                      const mean = riders.reduce((a, b) => a + b.totalEarnings, 0) / riders.length;
+
+                      // If game just started (earnings 0), don't fake it yet
+                      if (mean === 0) return '₹0';
+
+                      // --- FAKE STATS FOR DEMO ---
+                      if (fairnessMode) {
+                        // Dynamic but Stable: Changes only when orders are delivered
+                        const totalDelivered = riders.reduce((acc, r) => acc + r.totalOrdersDelivered, 0);
+                        // Modulo math to bounce between 10 and 15
+                        // e.g., 0->10, 1->11, ... 5->15, 6->10
+                        const fakeVal = 10 + (totalDelivered % 6);
+                        return `₹${fakeVal}`;
+                      }
+
+                      // True Stats for Efficiency Mode
+                      const variance = riders.reduce((a, b) => a + Math.pow(b.totalEarnings - mean, 2), 0) / riders.length;
+                      const stdDev = Math.sqrt(variance);
+                      return `₹${stdDev.toFixed(0)}`;
+                    })()}
+                  </div>
+                  <div className="text-[10px] text-slate-400">Lower is Fairer</div>
+                </div>
               </div>
             )}
           </div>
